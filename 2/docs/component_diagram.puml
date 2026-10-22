@@ -1,0 +1,52 @@
+@startuml
+title Диаграмма компонентов: сервис "число + 1"
+
+skinparam componentStyle uml2
+skinparam defaultFontName DejaVu Sans
+left to right direction
+
+component "Клиент\n(браузер / curl)" as client
+
+interface "HTTP POST /increment\nзапрос: { number: n }\nответ: n+1 или ошибка" as IHttp
+
+component "Веб-сервер\n<<Nginx>>" as web
+
+interface "HTTP\n(reverse proxy)" as IProxy
+
+component "Сервер приложений" as appsrv {
+  portin " " as pin
+  component "Контроллер\nNumberController" as ctrl
+  component "Сервис\nNumberService" as svc
+  component "Репозиторий\nNumberRepository" as repo
+  component "Логгер" as logger
+}
+
+interface "SQL" as ISql
+
+database "База данных\n<<PostgreSQL>>\nтабл. processed_numbers" as db
+
+artifact "app.log" as logfile
+
+client ..> IHttp
+IHttp -- web
+web ..> IProxy
+IProxy -- pin
+pin --> ctrl : <<delegate>>
+
+ctrl ..> svc : process(n)
+svc ..> repo : exists(n)\nexists(n+1)\nsave(n)
+svc ..> logger : error(...)
+
+repo ..> ISql
+ISql -- db
+logger ..> logfile : запись
+
+note right of svc
+  Проверка входного числа n:
+  n не целое или вне [0..N] -> 400
+  n уже есть в БД -> ошибка #1 (409)
+  n+1 уже есть в БД -> ошибка #2 (409)
+  иначе сохранить n, вернуть n+1
+end note
+
+@enduml

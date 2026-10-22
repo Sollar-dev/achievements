@@ -1,0 +1,68 @@
+@startuml
+title Диаграмма последовательностей: обработка POST /increment
+
+skinparam defaultFontName DejaVu Sans
+skinparam sequenceMessageAlign center
+
+participant "Клиент" as C
+participant "Веб-сервер\n(Nginx)" as W
+participant ":NumberController" as Ctrl
+participant ":NumberService" as Svc
+participant ":NumberRepository" as Repo
+database "БД\n(PostgreSQL)" as DB
+participant ":Логгер" as Log
+
+C -> W : POST /increment\n{"number": n}
+activate W
+W -> Ctrl : POST /increment\n(reverse proxy)
+activate Ctrl
+Ctrl -> Svc : process(n)
+activate Svc
+
+alt n не целое число или n вне [0..N]
+    Svc ->> Log : error("некорректное число: n")
+    Svc --> Ctrl : ошибка валидации
+    Ctrl --> W : 400 Bad Request
+    W --> C : 400 Bad Request\n{"error": "некорректное число"}
+
+else n целое и 0 <= n <= N
+    Svc -> Repo ++ : exists(n)
+    Repo -> DB ++ : SELECT 1 FROM processed_numbers\nWHERE num = n
+    DB --> Repo -- : результат
+    Repo --> Svc -- : true / false
+
+    alt exists(n) = true (ошибка #1)
+        Svc ->> Log : error("число n уже поступало")
+        Svc --> Ctrl : ошибка #1
+        Ctrl --> W : 409 Conflict
+        W --> C : 409 Conflict\n{"error": "число уже поступало"}
+
+    else exists(n) = false
+        Svc -> Repo ++ : exists(n+1)
+        Repo -> DB ++ : SELECT 1 FROM processed_numbers\nWHERE num = n+1
+        DB --> Repo -- : результат
+        Repo --> Svc -- : true / false
+
+        alt exists(n+1) = true (ошибка #2)
+            Svc ->> Log : error("n на 1 меньше обработанного числа")
+            Svc --> Ctrl : ошибка #2
+            Ctrl --> W : 409 Conflict
+            W --> C : 409 Conflict\n{"error": "число на 1 меньше уже обработанного"}
+
+        else exists(n+1) = false
+            Svc -> Repo ++ : save(n)
+            Repo -> DB ++ : INSERT INTO processed_numbers(num)\nVALUES (n) ON CONFLICT DO NOTHING
+            DB --> Repo -- : OK
+            Repo --> Svc -- : OK
+            Svc --> Ctrl : n+1
+            Ctrl --> W : 200 OK
+            W --> C : 200 OK\n{"result": n+1}
+        end
+    end
+end
+
+deactivate Svc
+deactivate Ctrl
+deactivate W
+
+@enduml
